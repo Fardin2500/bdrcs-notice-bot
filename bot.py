@@ -1,17 +1,20 @@
-import os, json, time, hashlib
+import os
+import json
+import time
+import hashlib
 import urllib.request
+import urllib.parse
 import xml.etree.ElementTree as ET
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
-
 STATE_FILE = "state.json"
 
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"seen": []}
+    return {"seen": [], "seen_titles": []}
 
 def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -29,69 +32,96 @@ def tg_send(text):
         return r.read()
 
 def fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=25) as r:
         return r.read()
 
+def clean_link(link):
+    parsed = urllib.parse.urlparse(link)
+    return urllib.parse.urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        "",
+        "",
+        ""
+    ))
+
 def parse_rss(xml_bytes):
-    # Works for RSS 2.0 + basic Atom
     out = []
     root = ET.fromstring(xml_bytes)
 
-    # RSS items
     for item in root.findall(".//item"):
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
         pub = (item.findtext("pubDate") or "").strip()
         if title and link:
-            out.append((title, link, pub))
+            out.append((title, clean_link(link), pub))
 
-    # Atom entries
     for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry"):
         title = (entry.findtext("{http://www.w3.org/2005/Atom}title") or "").strip()
         link_el = entry.find("{http://www.w3.org/2005/Atom}link")
         link = (link_el.get("href") if link_el is not None else "").strip()
         pub = (entry.findtext("{http://www.w3.org/2005/Atom}updated") or "").strip()
         if title and link:
-            out.append((title, link, pub))
+            out.append((title, clean_link(link), pub))
 
     return out
 
-def key(title, link):
-    h = hashlib.sha256((title + "|" + link).encode("utf-8")).hexdigest()
-    return h
+def make_key(title, link):
+    text = f"{title.lower()}|{link.lower()}"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+def normalize_title(title):
+    return " ".join(title.lower().split())
 
 def main():
     state = load_state()
     seen = set(state.get("seen", []))
+    seen_titles = set(state.get("seen_titles", []))
 
     with open("feeds.txt", "r", encoding="utf-8") as f:
         feeds = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
 
-    new_keys = []
+    new_seen = []
+    new_titles = []
+
     for feed in feeds:
         try:
             xml_bytes = fetch(feed)
             items = parse_rss(xml_bytes)
-            # newest first to oldest last -> send oldest first
-            items = list(reversed(items))[-10:]  # limit bursts
+
+            # পুরনো থেকে নতুন পাঠাবে
+            items = list(reversed(items))[-10:]
+
             for title, link, pub in items:
-                k = key(title, link)
-                if k in seen:
+                title_norm = normalize_title(title)
+                item_key = make_key(title, link)
+
+                if item_key in seen:
                     continue
+
+                if title_norm in seen_titles:
+                    continue
+
                 msg = f"📌 {title}\n🔗 {link}"
                 tg_send(msg)
-                new_keys.append(k)
+
+                new_seen.append(item_key)
+                new_titles.append(title_norm)
                 time.sleep(1)
-        except Exception as e:
-            # optional: send error to channel (commented to avoid spam)
-            # tg_send(f"⚠️ Feed error: {feed}\n{e}")
+
+        except Exception:
             pass
 
-    # keep last 500 seen
-    merged = list(seen) + new_keys
-    merged = merged[-500:]
-    save_state({"seen": merged})
+    all_seen = list(seen) + new_seen
+    all_titles = list(seen_titles) + new_titles
+
+    state = {
+        "seen": all_seen[-1000:],
+        "seen_titles": all_titles[-1000:]
+    }
+    save_state(state)
 
 if __name__ == "__main__":
     main()
