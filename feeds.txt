@@ -1,7 +1,4 @@
 https://news.google.com/rss/search?q=Bangladesh+Red+Crescent+Society
-https://news.google.com/rss/search?q=BDRCS+notice
-https://news.google.com/rss/search?q=Bangladesh+Red+Crescent+Society
-https://news.google.com/rss/search?q=BDRCS
 https://bdrcs.org/category/news/feed
 https://bdrcs.org/blog/feed
 https://rsshub.app/facebook/page/bdredcrescent
